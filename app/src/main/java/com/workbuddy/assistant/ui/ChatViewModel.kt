@@ -46,7 +46,9 @@ class ChatViewModel : ViewModel() {
     val ttftMs: StateFlow<Long?> = _ttftMs.asStateFlow()
 
     fun send(text: String) {
-        if (text.isBlank() || _isStreaming.value) return
+        android.util.Log.i("SSE_CHAT", "send() 被调用: \"$text\"")
+        if (text.isBlank()) { android.util.Log.w("SSE_CHAT", "输入为空，忽略"); return }
+        if (_isStreaming.value) { android.util.Log.w("SSE_CHAT", "上一条还在生成中，忽略本次点击"); return }
 
         // 1. 先把"用户消息"和一条空的"AI 占位消息"塞进列表
         _messages.value = _messages.value + UiMessage(isUser = true, content = text)

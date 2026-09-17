@@ -69,6 +69,29 @@ data class StreamResponse(
     }
 }
 
+/**
+ * 非流式响应（stream=false 或服务器拒绝流式时返回）：
+ * {"choices":[{"message":{"role":"assistant","content":"完整回答..."}}]}
+ * 注意与流式的 delta 区分：非流式是完整的 message。
+ */
+@Serializable
+data class NonStreamResponse(
+    val choices: List<Choice> = emptyList(),
+    val error: ApiError? = null,
+) {
+    @Serializable
+    data class Choice(val message: Message = Message())
+
+    @Serializable
+    data class Message(val role: String? = null, val content: String? = null)
+
+    @Serializable
+    data class ApiError(
+        val code: String? = null,
+        val message: String? = null,
+    )
+}
+
 /** UI 层的消息模型（多了"是不是我发的"和"是否出错"这类展示状态） */
 data class UiMessage(
     val isUser: Boolean,
