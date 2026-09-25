@@ -68,4 +68,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")                       // 网络与 SSE
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")    // 请求/响应模型
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")    // 协程
+
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
 }

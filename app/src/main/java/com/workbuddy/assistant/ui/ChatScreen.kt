@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.tooling.preview.Preview
 
 /**
  * 聊天界面 —— 刻意"零封装"：一个文件看完整个 UI。
@@ -133,5 +134,13 @@ private fun MessageBubble(msg: com.workbuddy.assistant.model.UiMessage) {
                 lineHeight = 22.sp
             )
         }
+    }
+}
+
+@Preview
+@Composable
+private fun ChatScreenPreview() {
+    MaterialTheme {
+        ChatScreen(vm = ChatViewModel())
     }
 }
