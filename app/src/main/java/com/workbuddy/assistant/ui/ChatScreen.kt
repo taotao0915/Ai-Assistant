@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.ui.tooling.preview.Preview
 
 /**
  * 聊天界面 —— 刻意"零封装"：一个文件看完整个 UI。
@@ -137,10 +136,7 @@ private fun MessageBubble(msg: com.workbuddy.assistant.model.UiMessage) {
     }
 }
 
-@Preview
-@Composable
-private fun ChatScreenPreview() {
-    MaterialTheme {
-        ChatScreen(vm = ChatViewModel())
-    }
-}
+// 【W4 删除】ChatScreenPreview：
+// ViewModel 改为 AndroidViewModel 后构造函数需要 Application 参数，
+// 而静态 Preview 环境没有 Application —— Compose 的 Preview 适合纯 UI
+// 组件（不依赖 ViewModel 的那种），带状态机的页面直接真机跑更实在。

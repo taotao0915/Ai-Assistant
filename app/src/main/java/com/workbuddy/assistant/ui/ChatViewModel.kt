@@ -1,6 +1,7 @@
 package com.workbuddy.assistant.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.workbuddy.assistant.agent.ChatClient
 import com.workbuddy.assistant.agent.LangChain4jChatClient
@@ -31,13 +32,21 @@ import kotlinx.coroutines.launch
  *   做着完全一样的事（模型依然无状态！只是拼历史的活儿换人干了）。
  *   对照 git 历史看这个文件的 diff，"框架帮你省了什么"一目了然。
  *   UI 层记忆（messages 列表）依然归我们管 —— 显示和协议是两回事。
+ *
+ * 【W4 变化】ViewModel → AndroidViewModel：
+ *   工具（DeviceTools）要访问系统服务和 SharedPreferences，需要 Context。
+ *   两不推荐：① 在 ViewModel 里持有 Activity 引用（内存泄漏）；
+ *             ② 静态变量存 applicationContext（测试地狱、时序坑）。
+ *   正确姿势：AndroidViewModel(application) —— 框架把 Application 塞给你，
+ *   ViewModelProvider 反射创建时自动匹配 (Application) 构造函数。
  */
-class ChatViewModel : ViewModel() {
+class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // W1 的 SseChatClient.kt 保留在 network 包里作为"手写参考实现"，不再接入。
     // 想对比两种实现：把下面这行换回 SseChatClient 会编译失败（签名不同，
     // 它需要 history 参数）—— 这个编译错误本身就说明了 W1/W3 的职责差异。
-    private val chatClient: ChatClient = LangChain4jChatClient()
+    // W4：把 applicationContext 传给客户端 → 传给工具集（电量/备忘录要用）。
+    private val chatClient: ChatClient = LangChain4jChatClient(application.applicationContext)
 
     private val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()

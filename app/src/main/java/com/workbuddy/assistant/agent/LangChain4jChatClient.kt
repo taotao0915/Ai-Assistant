@@ -51,7 +51,7 @@ import kotlin.coroutines.resumeWithException
  *    OkHttpHttpClient（见 OkHttpHttpClient.kt，不到 100 行）。
  * 3. R8 keep 规则：proguard-rules.pro 里的 -keep（反射目标不能被混淆裁掉）
  */
-class LangChain4jChatClient : ChatClient {
+class LangChain4jChatClient(context: android.content.Context) : ChatClient {
 
     /**
      * 【声明 1/2】用注解描述"和模型对话"长什么样。
@@ -87,13 +87,19 @@ class LangChain4jChatClient : ChatClient {
         .build()
 
     /**
-     * 【声明 2/2】组装器：模型 + 记忆 + 接口 = 可用的助手。
+     * 【声明 2/2】组装器：模型 + 记忆 + 工具 + 接口 = 可用的 Agent。
      * chatMemoryProvider：每个 memoryId 发一个滑动窗口记忆，保留最近 20 条。
+     * 【W4 新增】tools(...)：把 DeviceTools 交给框架。框架会：
+     *   1. 反射扫描所有 @Tool 方法 → 生成 ToolSpecification（JSON Schema）
+     *   2. 每次请求把工具清单随 messages 一起发给模型（Function Calling 协议）
+     *   3. 模型说"我要调工具"时，框架反射执行真机代码，结果喂回模型，
+     *      循环直到模型给出最终回答 —— 这个循环就是 Agent Loop。
      * 【思考】为什么是 20 条而不是无限？—— messages 全量重发是有 token 成本的，
      * 对话越长越贵越慢（docs/01 思考题的框架侧答案），窗口就是"性价比阀"。
      */
     private val assistant: Assistant = AiServices.builder(Assistant::class.java)
         .streamingChatModel(model)
+        .tools(DeviceTools(context))   // W4：工具集注册 —— 一个对象，四件"手"
         .chatMemoryProvider { MessageWindowChatMemory.withMaxMessages(20) }
         .build()
 
@@ -131,6 +137,18 @@ class LangChain4jChatClient : ChatClient {
                     full.append(delta)
                     onDelta(delta)          // 回调来自 OkHttp 线程，StateFlow 天然线程安全
                 }
+                .onToolExecuted { toolExecution ->
+                    // 【W4 新增】工具执行完成回调 —— 观察决策与结果的最佳窗口：
+                    // request.name()/arguments() 是模型的"决策"，
+                    // result() 是真机代码的"执行结果"（会自动喂回模型）。
+                    // 注意：流式模式下这个回调仍在 OkHttp 后台线程。
+                    Log.i(
+                        TAG,
+                        "工具已执行: ${toolExecution.request().name()}" +
+                            " 参数=${toolExecution.request().arguments()}" +
+                            " 结果=${toolExecution.result()}"
+                    )
+                }
                 .onCompleteResponse {
                     Log.i(TAG, "流结束, 共 ${full.length} 字符")
                     cont.resume(full.toString())
@@ -147,6 +165,8 @@ class LangChain4jChatClient : ChatClient {
         const val TAG = "SSE_CHAT"   // 沿用同一日志标签，Logcat 过滤习惯不用改
         const val MEMORY_ID = "main" // 单会话固定 ID；多会话/多用户时才需要动态生成
         const val SYSTEM_PROMPT =
-            "你是运行在 Android 手机上的 AI 助手，回答简洁、准确，默认使用中文。"
+            "你是运行在 Android 手机上的 AI 助手，回答简洁、准确，默认使用中文。" +
+            "你可以调用工具获取当前时间、电量，或读写备忘录。" +
+            "遇到这类需求优先用工具获取真实数据，不要编造。"
     }
 }
