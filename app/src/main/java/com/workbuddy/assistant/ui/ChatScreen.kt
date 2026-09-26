@@ -12,12 +12,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.workbuddy.assistant.model.UiMessage
 
 /**
- * 聊天界面 —— 刻意"零封装"：一个文件看完整个 UI。
+ * 聊天界面 —— 两层结构（这是 Compose 的标准拆分法，面试常问）：
+ *
+ *   ChatScreen        有状态壳：连接 ViewModel，把 StateFlow 收集成 Compose 状态
+ *   ChatScreenContent 无状态内容：只吃参数画界面，不知道 ViewModel 的存在
+ *
+ * 这样拆的红利：
+ * 1. Preview 能用了 —— 无状态层不依赖 Application/ViewModel，假数据直接渲染；
+ * 2. 可测试性 —— 以后写 UI 测试不需要 Android 环境；
+ * 3. 复用性 —— 同样的消息列表以后能放进平板双栏布局。
+ *
  * 你会发现它没有任何"主动刷新"逻辑，全是"看到状态画界面"。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -26,6 +37,23 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val messages by vm.messages.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
     val ttft by vm.ttftMs.collectAsState()
+
+    ChatScreenContent(
+        messages = messages,
+        isStreaming = isStreaming,
+        ttft = ttft,
+        onSend = vm::send,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatScreenContent(
+    messages: List<UiMessage>,
+    isStreaming: Boolean,
+    ttft: Long?,
+    onSend: (String) -> Unit,
+) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -93,7 +121,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 Spacer(Modifier.width(8.dp))
                 FilledIconButton(
                     onClick = {
-                        vm.send(input)
+                        onSend(input)
                         input = ""
                     },
                     enabled = input.isNotBlank() && !isStreaming
@@ -106,7 +134,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 }
 
 @Composable
-private fun MessageBubble(msg: com.workbuddy.assistant.model.UiMessage) {
+private fun MessageBubble(msg: UiMessage) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (msg.isUser) Arrangement.End else Arrangement.Start
@@ -136,7 +164,54 @@ private fun MessageBubble(msg: com.workbuddy.assistant.model.UiMessage) {
     }
 }
 
-// 【W4 删除】ChatScreenPreview：
-// ViewModel 改为 AndroidViewModel 后构造函数需要 Application 参数，
-// 而静态 Preview 环境没有 Application —— Compose 的 Preview 适合纯 UI
-// 组件（不依赖 ViewModel 的那种），带状态机的页面直接真机跑更实在。
+// ════════════════════════════════════════════════════════════════
+// Preview：假数据直接渲染无状态层，改 UI 时右侧面板秒级刷新，
+// 不用 Rebuild + 真机安装（W1 我们删掉了旧 Preview，根因就是它
+// 依赖 ViewModel；拆层之后这个问题不存在了）。
+// ════════════════════════════════════════════════════════════════
+
+/** 空状态：只有输入栏和标题 */
+@Preview(name = "空对话", showBackground = true, heightDp = 600)
+@Composable
+private fun ChatScreenEmptyPreview() {
+    MaterialTheme {
+        ChatScreenContent(messages = emptyList(), isStreaming = false, ttft = null, onSend = {})
+    }
+}
+
+/** 对话中：用户气泡 + AI 气泡（空内容 = 打字机占位）+ 错误气泡 */
+@Preview(name = "对话中（流式）", showBackground = true, heightDp = 600)
+@Composable
+private fun ChatScreenStreamingPreview() {
+    MaterialTheme {
+        ChatScreenContent(
+            messages = listOf(
+                UiMessage(isUser = true, content = "现在几点了？"),
+                UiMessage(isUser = false, content = ""),          // 空内容 → 显示 ▍ 占位
+            ),
+            isStreaming = true,
+            ttft = null,
+            onSend = {}
+        )
+    }
+}
+
+/** 完整对话：含工具回答和错误样式，调气泡排版时看这个 */
+@Preview(name = "完整对话", showBackground = true, heightDp = 600)
+@Composable
+private fun ChatScreenFullPreview() {
+    MaterialTheme {
+        ChatScreenContent(
+            messages = listOf(
+                UiMessage(isUser = true, content = "帮我记一下周六早上要跑步"),
+                UiMessage(isUser = false, content = "好的，已记下：周六早上要跑步。"),
+                UiMessage(isUser = true, content = "我记过什么？"),
+                UiMessage(isUser = false, content = "共1条备忘录：\n1. 周六早上要跑步"),
+                UiMessage(isUser = false, content = "网络连接失败，请重试", isError = true),
+            ),
+            isStreaming = false,
+            ttft = 860,
+            onSend = {}
+        )
+    }
+}

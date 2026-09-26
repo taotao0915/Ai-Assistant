@@ -2,6 +2,7 @@ package com.workbuddy.assistant.agent
 
 import android.util.Log
 import com.workbuddy.assistant.BuildConfig
+import com.workbuddy.assistant.agent.mcp.McpToolProvider
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel
 import dev.langchain4j.service.AiServices
 import dev.langchain4j.service.MemoryId
@@ -99,7 +100,11 @@ class LangChain4jChatClient(context: android.content.Context) : ChatClient {
      */
     private val assistant: Assistant = AiServices.builder(Assistant::class.java)
         .streamingChatModel(model)
-        .tools(DeviceTools(context))   // W4：工具集注册 —— 一个对象，四件"手"
+        .tools(DeviceTools(context))   // W4：本地工具 —— 编译期注册的"手"
+        // W4.5：MCP 外部工具 —— 运行时发现的"手"。ToolProvider 会在每次
+        // 对话前被框架回调，返回当前可用的 MCP 工具（缓存就绪才有）。
+        // 本地 @Tool 和 MCP 工具并存，模型按描述自主选型 —— 这就是生态。
+        .toolProvider(McpToolProvider.get())
         .chatMemoryProvider { MessageWindowChatMemory.withMaxMessages(20) }
         .build()
 
@@ -166,7 +171,7 @@ class LangChain4jChatClient(context: android.content.Context) : ChatClient {
         const val MEMORY_ID = "main" // 单会话固定 ID；多会话/多用户时才需要动态生成
         const val SYSTEM_PROMPT =
             "你是运行在 Android 手机上的 AI 助手，回答简洁、准确，默认使用中文。" +
-            "你可以调用工具获取当前时间、电量，或读写备忘录。" +
-            "遇到这类需求优先用工具获取真实数据，不要编造。"
+            "你可以调用工具获取当前时间、电量，或读写备忘录；还可能连接了 MCP 外部工具" +
+            "（工具名带 [MCP:xxx] 前缀）。遇到这类需求优先用工具获取真实数据，不要编造。"
     }
 }

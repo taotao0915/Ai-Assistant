@@ -5,7 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.workbuddy.assistant.agent.ChatClient
 import com.workbuddy.assistant.agent.LangChain4jChatClient
+import com.workbuddy.assistant.agent.mcp.McpToolProvider
 import com.workbuddy.assistant.model.UiMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +49,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 它需要 history 参数）—— 这个编译错误本身就说明了 W1/W3 的职责差异。
     // W4：把 applicationContext 传给客户端 → 传给工具集（电量/备忘录要用）。
     private val chatClient: ChatClient = LangChain4jChatClient(application.applicationContext)
+
+    init {
+        // 【W4.5】MCP 预热：连接握手 + 工具发现都是网络操作，必须离开主线程
+        // （ANR 红线）。provideTools() 在对话前只读缓存，所以这里越早启动，
+        // 第一条消息就越可能带全 MCP 工具。
+        viewModelScope.launch(Dispatchers.IO) {
+            val provider = McpToolProvider.get()
+            provider.warmUp()
+            provider.ensureLoaded()
+        }
+    }
 
     private val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
