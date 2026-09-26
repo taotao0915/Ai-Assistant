@@ -2,9 +2,9 @@ package com.workbuddy.assistant.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.workbuddy.assistant.model.ChatMessage
+import com.workbuddy.assistant.agent.ChatClient
+import com.workbuddy.assistant.agent.LangChain4jChatClient
 import com.workbuddy.assistant.model.UiMessage
-import com.workbuddy.assistant.network.SseChatClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,15 +25,19 @@ import kotlinx.coroutines.launch
  * 每秒几十个 token = messages 每秒变几十次 = UI 每秒重画几十次，
  * Compose 的智能重组（只重画变化的那一条 item）让它毫不卡顿。
  *
- * 【面试考点】LLM 应用里的"记忆"分两层：
- *   - UI 层记忆：messages 列表，只负责显示（上限 200 条防内存爆）
- *   - 请求层记忆：每次发请求，把历史映射成 role/content 再发出去
- *   W3 接 LangChain4j 时，这层会被框架的 ChatMemory 接管，
- *   你就能对比"手写"和"框架"到底帮你省了什么。
+ * 【W3 变化】"请求层记忆"交给了框架：
+ *   W1 时这里每次 send 都要手拼 history（system + 全部历史 role/content）；
+ *   W3 换成 LangChain4j 后，这段代码整个消失了 —— ChatMemory 在框架内部
+ *   做着完全一样的事（模型依然无状态！只是拼历史的活儿换人干了）。
+ *   对照 git 历史看这个文件的 diff，"框架帮你省了什么"一目了然。
+ *   UI 层记忆（messages 列表）依然归我们管 —— 显示和协议是两回事。
  */
 class ChatViewModel : ViewModel() {
 
-    private val chatClient = SseChatClient()
+    // W1 的 SseChatClient.kt 保留在 network 包里作为"手写参考实现"，不再接入。
+    // 想对比两种实现：把下面这行换回 SseChatClient 会编译失败（签名不同，
+    // 它需要 history 参数）—— 这个编译错误本身就说明了 W1/W3 的职责差异。
+    private val chatClient: ChatClient = LangChain4jChatClient()
 
     private val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
@@ -56,19 +60,14 @@ class ChatViewModel : ViewModel() {
         _ttftMs.value = null
         _isStreaming.value = true
 
-        // 2. 把历史（含刚发的这句）映射成协议消息 —— 注意看 system 消息怎么来的
-        val history = buildList {
-            add(ChatMessage("system", SYSTEM_PROMPT))
-            _messages.value
-                .filter { !it.isError && it.content.isNotBlank() }
-                .forEach { add(ChatMessage(if (it.isUser) "user" else "assistant", it.content)) }
-        }
-
+        // 2. 【W3 对比点】直接把用户这句话交给客户端 ——
+        //    W1 里这里的 buildList { system + 全部历史 } 整块消失了，
+        //    框架的 ChatMemory 会自动带上历史和 system prompt。
         viewModelScope.launch {
             val startAt = System.currentTimeMillis()
             try {
                 chatClient.streamChat(
-                    history,
+                    text,
                     onFirstToken = { _ttftMs.value = System.currentTimeMillis() - startAt },
                     onDelta = { delta ->
                         // 3. 每个 token 到达：替换最后一条占位消息（内容追加）
@@ -94,10 +93,5 @@ class ChatViewModel : ViewModel() {
                 _isStreaming.value = false
             }
         }
-    }
-
-    private companion object {
-        const val SYSTEM_PROMPT =
-            "你是运行在 Android 手机上的 AI 助手，回答简洁、准确，默认使用中文。"
     }
 }
