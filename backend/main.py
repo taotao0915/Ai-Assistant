@@ -1,51 +1,51 @@
 # ══════════════════════════════════════════════════════════════════
-# 【W5】Workbuddy 后端 —— 备忘录云 + RAG 知识库
+# 【W5+W6】Workbuddy 后端 —— 备忘录云 + RAG 知识库（可评估版）
 # ══════════════════════════════════════════════════════════════════
 #
-# 为什么 Android 需要 FastAPI 后端？（面试必考）
-#   1. 密钥安全：DashScope Key 放后端，APK 里只留内网地址（W1 就提过）
-#   2. 跨设备：备忘录存手机本地 = 换手机就没了；上云 = 多端同步
-#   3. 重活下沉：切块、向量化、检索都是 CPU/存储密集型，手机干不动也不该干
-#   4. 知识私有：个人文档不能发给第三方模型训练，只能本地/私有云持有
-#
-# 技术选型（刻意从简，教学优先）：
-#   SQLite       —— Python 自带，单文件数据库，零部署
-#   DashScope embeddings —— 复用你已有的 Key，text-embedding-v3 模型
-#   numpy 余弦相似度 —— 向量检索的本质就是"算距离取 TopK"，
-#                      不用 FAISS 才能看清它的真面目（W6 换真向量库）
+# 架构：本文件只做"HTTP 门面"，RAG 逻辑全在 rag_core.py（可单独测试）
+#   main.py     路由层：参数校验 + 调 rag_core
+#   rag_core.py 核心层：Embedder / 语义切块 / 向量检索 / Rerank / 评估指标
+#   eval.py     评估脚本：跑评估集，输出 HitRate / Recall / MRR
 #
 # 启动：
-#   pip install -r requirements.txt
+#   set DASHSCOPE_API_KEY=sk-xxx
 #   uvicorn main:app --host 0.0.0.0 --port 8000
-#   # 手机连电脑 USB 时可执行: adb reverse tcp:8000 tcp:8000
-#   # 然后安卓端 BASE_URL 用 http://127.0.0.1:8000
+#   # 手机 USB：adb reverse tcp:8000 tcp:8000
+#   # 离线测代码：set EMBED_BACKEND=local
+#
+# 为什么 Android 需要后端（面试必考）：
+#   1. 密钥安全：DashScope Key 在后端环境变量，APK 反编译也拿不到
+#   2. 跨设备：备忘录上云 = 换手机不丢
+#   3. 重活下沉：切块/向量化/检索是存储与计算密集，手机不该干
+#   4. 知识私有：私人文档只留在自己的机器上
 
-import json
 import os
 import sqlite3
 import time
 from typing import List
 
-import numpy as np
-import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="Workbuddy Backend", version="0.1.0")
+from rag_core import (
+    BASE_DIR,
+    VectorStore,
+    evaluate,
+    get_embedder,
+    retrieve,
+    semantic_chunk,
+)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = FastAPI(title="Workbuddy Backend", version="0.2.0")
+
 DB_PATH = os.path.join(BASE_DIR, "workbuddy.db")
 VECTOR_PATH = os.path.join(BASE_DIR, "vectors.json")
 
-DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-EMBED_MODEL = "text-embedding-v3"
-EMBED_DIM = 1024
-
-# API Key 从环境变量读（别写死在代码里——这是 W1 的教训升级版）
-API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+embedder = get_embedder()
+store = VectorStore(VECTOR_PATH)
 
 
-# ── 数据层：SQLite（备忘录）+ JSON（向量库）────────────────────────
+# ── 备忘录（SQLite，W5 不变）────────────────────────────────────────
 
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -66,62 +66,7 @@ def init_db():
 init_db()
 
 
-def load_vectors() -> List[dict]:
-    if not os.path.exists(VECTOR_PATH):
-        return []
-    with open(VECTOR_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_vectors(chunks: List[dict]):
-    with open(VECTOR_PATH, "w", encoding="utf-8") as f:
-        json.dump(chunks, f, ensure_ascii=False)
-
-
-# ── Embedding：文本 → 1024 维向量 ─────────────────────────────────
-# 本质：把一段话变成高维空间里的一个"点"，语义相近的文本，点离得近。
-# "深圳今天下雨" 和 "鹏城有降雨" 字面完全不同，但向量距离很近 ——
-# 这就是传统关键词搜索做不到的"语义检索"。
-
-def embed(texts: List[str]) -> List[List[float]]:
-    if not API_KEY:
-        raise HTTPException(500, "未设置 DASHSCOPE_API_KEY 环境变量")
-    vectors: List[List[float]] = []
-    # text-embedding-v3 单次最多 10 条，分批
-    for i in range(0, len(texts), 10):
-        batch = texts[i:i + 10]
-        resp = requests.post(
-            f"{DASHSCOPE_BASE}/embeddings",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            json={"model": EMBED_MODEL, "input": batch},
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(500, f"embedding 调用失败: {resp.text[:200]}")
-        data = sorted(resp.json()["data"], key=lambda d: d["index"])
-        vectors.extend(d["embedding"] for d in data)
-    return vectors
-
-
-# ── 切块（Chunking）：长文档 → 小段落 ────────────────────────────
-# 为什么切？① embedding 对超长文本会"稀释"语义；② 检索要喂给模型的
-# 是"相关的那几段"，不是全文（上下文窗口是稀缺资源，W3 思考题的呼应）。
-# 固定长度 + 重叠窗口是最朴素的策略，W6 可以对比"按段落语义切"。
-
-def chunk_text(text: str, size: int = 300, overlap: int = 50) -> List[str]:
-    text = text.strip()
-    if len(text) <= size:
-        return [text] if text else []
-    chunks = []
-    step = size - overlap
-    for start in range(0, len(text), step):
-        piece = text[start:start + size]
-        if len(piece) >= 30:          # 太短的尾巴丢弃
-            chunks.append(piece)
-    return chunks
-
-
-# ── API 模型 ─────────────────────────────────────────────────────
+# ── 请求模型 ─────────────────────────────────────────────────────
 
 class MemoIn(BaseModel):
     content: str
@@ -130,18 +75,32 @@ class MemoIn(BaseModel):
 class IngestIn(BaseModel):
     title: str
     text: str
+    max_size: int = 400
+    overlap: int = 60
 
 
 class SearchIn(BaseModel):
     query: str
     top_k: int = 4
+    coarse_k: int = 20
+    use_rerank: bool = True          # W6 开关：关掉 = 退回 W5 单阶段检索
 
 
-# ── 路由：健康检查 / 备忘录 / 知识库 ─────────────────────────────
+class EvalIn(BaseModel):
+    items: List[dict]
+    top_k: int = 4
+    use_rerank: bool = True
+
+
+# ── 路由 ─────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "chunks": len(load_vectors())}
+    return {
+        "status": "ok",
+        "embedder": embedder.name,
+        "chunks": len(store.chunks),
+    }
 
 
 @app.post("/memos")
@@ -165,42 +124,40 @@ def list_memos():
 
 @app.post("/ingest")
 def ingest(doc: IngestIn):
-    """文档入库：切块 → 向量化 → 存库。返回切了几块。"""
-    chunks = chunk_text(doc.text)
+    """文档入库：语义切块 → 向量化 → 存库。"""
+    chunks = semantic_chunk(doc.text, doc.max_size, doc.overlap)
     if not chunks:
         raise HTTPException(400, "文档内容为空")
-    vectors = embed(chunks)
-    store = load_vectors()
-    base_id = int(time.time() * 1000)
-    for idx, (text, vec) in enumerate(zip(chunks, vectors)):
-        store.append({
-            "id": f"{base_id}-{idx}",
-            "source": doc.title,
-            "text": text,
-            "vector": vec,
-        })
-    save_vectors(store)
-    return {"chunks": len(chunks), "total_chunks": len(store)}
+    vectors = embedder.embed(chunks)
+    added = store.add(doc.title, chunks, vectors, embedder)
+    return {"chunks": added, "total_chunks": len(store.chunks),
+            "embedder": embedder.name}
 
 
 @app.post("/search")
 def search(q: SearchIn):
-    """RAG 的核心一步：查也向量化 → 和所有块算余弦 → 取 TopK。"""
-    store = load_vectors()
-    if not store:
-        return {"results": [], "note": "知识库为空，先 POST /ingest 入库"}
-    qvec = np.array(embed([q.query])[0], dtype=np.float32)
-    mat = np.array([c["vector"] for c in store], dtype=np.float32)
-    # 余弦相似度 = 点积 / (模长×模长)。向量为单位化后的通用写法。
-    sims = mat @ qvec / (np.linalg.norm(mat, axis=1) * np.linalg.norm(qvec) + 1e-8)
-    top_idx = np.argsort(sims)[::-1][: q.top_k]
-    return {
-        "results": [
-            {
-                "score": round(float(sims[i]), 4),
-                "source": store[i]["source"],
-                "text": store[i]["text"],
-            }
-            for i in top_idx
-        ]
-    }
+    """两阶段检索：向量粗排召回 → Rerank 精排。"""
+    results = retrieve(
+        q.query, store, embedder,
+        coarse_k=q.coarse_k, final_k=q.top_k, use_rerank=q.use_rerank,
+    )
+    return {"results": results, "count": len(results),
+            "rerank_applied": q.use_rerank and bool(os.environ.get("DASHSCOPE_API_KEY"))}
+
+
+@app.post("/eval")
+def run_eval(body: EvalIn):
+    """跑评估集 —— 没有度量就没有优化。"""
+    return evaluate(body.items, store, embedder,
+                    top_k=body.top_k, use_rerank=body.use_rerank)
+
+
+@app.get("/stats")
+def stats():
+    """知识库概览：来源分布，排查"到底入没入库"。"""
+    by_source: dict = {}
+    for c in store.chunks:
+        by_source[c["source"]] = by_source.get(c["source"], 0) + 1
+    return {"total_chunks": len(store.chunks),
+            "embedder": store.embedder_name,
+            "sources": by_source}

@@ -1,0 +1,17 @@
+[
+  {
+    "question": "我哪天要讲课？看什么内容？",
+    "expected_source": "学习计划",
+    "expected_keyword": "周三晚上"
+  },
+  {
+    "question": "端侧模型用什么方案？",
+    "expected_source": "学习计划",
+    "expected_keyword": "MNN"
+  },
+  {
+    "question": "目标年薪是多少？",
+    "expected_source": "求职目标",
+    "expected_keyword": "60"
+  }
+]

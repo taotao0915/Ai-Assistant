@@ -1,4 +1,6 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
+# 仅"在线路径"需要（DashScope embedding / rerank），离线测试可不装
 requests>=2.31
+# 可选：加速余弦计算；缺失时自动降级为纯 Python（功能一致，速度略慢）
 numpy>=1.26
