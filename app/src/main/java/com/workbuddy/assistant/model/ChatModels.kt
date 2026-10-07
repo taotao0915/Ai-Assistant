@@ -92,9 +92,31 @@ data class NonStreamResponse(
     )
 }
 
+/**
+ * 【W7 新增】这条回答是谁产出的。
+ *
+ * 为什么值得单独一个字段？因为端云混合最大的风险是"用户感知不到"：
+ * 用户不知道哪句是手机算的、哪句是云端算的，就不会觉得端侧有价值，
+ * 也不会在断网时意识到"原来我还能用"。
+ * 所以把推理来源显式画在气泡上，是端侧功能的产品化必修课。
+ */
+enum class MessageSource(val label: String) {
+    /** 云端大模型（qwen-plus） */
+    CLOUD("云端"),
+
+    /** 手机端侧模型（MediaPipe / Gemma） */
+    DEVICE("端侧"),
+
+    /** 用户自己发的，没有来源 */
+    NONE(""),
+}
+
 /** UI 层的消息模型（多了"是不是我发的"和"是否出错"这类展示状态） */
 data class UiMessage(
     val isUser: Boolean,
     val content: String,
     val isError: Boolean = false,
+    val source: MessageSource = MessageSource.NONE,
+    /** 端侧回答时附带的性能账，展示成小字（TTFT / 解码速度） */
+    val deviceStats: String? = null,
 )

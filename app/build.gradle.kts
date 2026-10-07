@@ -33,6 +33,21 @@ android {
             "String", "DASHSCOPE_API_KEY",
             "\"${localProps.getProperty("dashscope.apiKey", "")}\""
         )
+
+        // ── 【W7 新增】ABI 裁剪：只保留真机架构 ──────────────────────
+        // MediaPipe 的 aar 里带 4 个 ABI 的 libllm_inference_engine_jni.so：
+        //   arm64-v8a 12.8MB / armeabi-v7a 8.3MB / x86 17.2MB / x86_64 14.7MB
+        // 全打进 APK 约 +53MB，而真机只用得上前两个。
+        // ⚠️ 裁掉 x86_64 后**模拟器装不上**。要用模拟器调试 W7，
+        //    临时把 "x86_64" 加回列表即可（只在调试期加，打包前记得删）。
+        // ⚠️ ndk {} 必须写在 defaultConfig 里。写到 android {} 顶层会报
+        //    "Unresolved reference: ndk" —— 这是 Gradle DSL 的分层规则：
+        //    决定 APK 产物内容的配置（ABI/包名/版本号）归 defaultConfig，
+        //    构建行为配置（compileOptions/packaging）归 android 顶层。
+        //    搞错层级不会提示"放错了"，只会说符号找不到。
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -125,6 +140,32 @@ dependencies {
         // 默认 JDK HttpClient 实现直接排除：Android 上没有也不需要它
         exclude(group = "dev.langchain4j", module = "langchain4j-http-client-jdk")
     }
+
+    // ── 【W7】端侧推理引擎 ─────────────────────────────────────────────
+    // Google 的 MediaPipe LLM Inference：官方 AAR，一行依赖就能跑。
+    //
+    // ⚠️ 两个版本相关的坑，先记下来：
+    //  1. tasks-genai **不在 Maven Central**，只在 Google Maven
+    //     （dl.google.com/android/maven2）。我们从 maven.aliyun.com
+    //     的 google 镜像拉，所以 settings.gradle.kts 里那行
+    //     maven("https://maven.aliyun.com/repository/google") 是必需项 ——
+    //     删掉它就会报 "Could not find com.google.mediapipe:tasks-genai"。
+    //  2. 这个库的 API 在版本间改过（官方文档的 Kotlin 示例就和
+    //     0.10.27 的实际签名对不上，setTopK 其实在 Session 层）。
+    //     升版本前务必先用 javap 反编译 aar 核对签名，
+    //     方法见 docs/07 里"jar 考古"那一节。
+    //
+    // 当前最新是 0.10.35；这里钉 0.10.27 是因为我们已按它核实过 API。
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
+
+    // ── 【W7.5 新增】端侧文本向量化 ──────────────────────────────────
+    // 用于端侧 RAG 的 embedder：把文字变成向量，纯本地计算，不联网。
+    // 版本说明：tasks-genai 是 0.10.27，而 tasks-text 的 0.10.27 在 Maven 上
+    // 不存在（0.10.26 → 0.10.28 之间跳了号），所以锁 0.10.26。
+    // 两者共用 tasks-core，Gradle 会自动解析到同一个版本，不会打两份。
+    // ⚠️ 这个 aar 的 jni/ 里**只有 arm64-v8a**（7.3MB），没有 v7a、没有 x86_64。
+    //    所以 32 位真机和模拟器都用不了向量检索 —— OnDeviceRetriever 里有预检查。
+    implementation("com.google.mediapipe:tasks-text:0.10.26")
 
     // desugaring 的运行时库（配合 compileOptions 里的开关）
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")

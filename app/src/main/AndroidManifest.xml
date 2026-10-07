@@ -4,6 +4,12 @@
     <!-- 流式对话的唯一系统权限：访问网络 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 【W7 新增】端云路由要判断"当前有没有网"来决定走端侧还是云端。
+         注意这是普通权限（normal），不需要运行时申请，也不涉及用户隐私——
+         它只能读到"有没有网络能力"，读不到任何网络内容。
+         真正的联网检测请看 EngineRouter.isOnline() 里的 NetworkCapabilities 用法。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:label="AI Assistant"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
